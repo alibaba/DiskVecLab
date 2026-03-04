@@ -1,0 +1,16 @@
+.idea
+ELPIS/code/build
+ELPIS/code/Release
+tempfolder*
+
+build
+log
+MARGO/release
+MARGO/debug
+MARGO/index
+
+Gorgeous/release
+Gorgeous/debug
+
+**/config_dataset_auto.sh
+indices

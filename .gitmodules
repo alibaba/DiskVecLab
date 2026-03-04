@@ -1,0 +1,9 @@
+[submodule "src/SPANN"]
+	path = src/SPANN
+	url = https://github.com/microsoft/SPTAG
+[submodule "src/RaBitQ-Library"]
+	path = src/RaBitQ-Library
+	url = https://github.com/VectorDB-NTU/RaBitQ-Library
+[submodule "src/PipeANN"]
+	path = src/PipeANN
+	url = https://github.com/thustorage/PipeANN
