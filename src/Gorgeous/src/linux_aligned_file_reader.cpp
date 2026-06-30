@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdio>
 #include <iostream>
+#include "ann_exception.h"
 #include "tsl/robin_map.h"
 #include "utils.h"
 #define MAX_EVENTS 1024
@@ -13,6 +14,10 @@
 namespace {
   typedef struct io_event io_event_t;
   typedef struct iocb     iocb_t;
+
+  inline io_context_t to_aio(const IOContext &ctx) {
+    return reinterpret_cast<io_context_t>(ctx.impl);
+  }
 
   void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
                   uint64_t n_retries = 0) {
@@ -107,11 +112,10 @@ LinuxAlignedFileReader::~LinuxAlignedFileReader() {
   }
 }
 
-io_context_t &LinuxAlignedFileReader::get_ctx() {
+IOContext &LinuxAlignedFileReader::get_ctx() {
   std::unique_lock<std::mutex> lk(ctx_mut);
-  // perform checks only in DEBUG mode
   if (ctx_map.find(std::this_thread::get_id()) == ctx_map.end()) {
-    std::cerr << "bad thread access; returning -1 as io_context_t" << std::endl;
+    std::cerr << "bad thread access; returning invalid IOContext" << std::endl;
     return this->bad_ctx;
   } else {
     return ctx_map[std::this_thread::get_id()];
@@ -126,8 +130,8 @@ void LinuxAlignedFileReader::register_thread() {
               << std::endl;
     return;
   }
-  io_context_t ctx = 0;
-  int          ret = io_setup(MAX_EVENTS, &ctx);
+  io_context_t aio_ctx = 0;
+  int          ret = io_setup(MAX_EVENTS, &aio_ctx);
   if (ret != 0) {
     lk.unlock();
     assert(errno != EAGAIN);
@@ -135,9 +139,11 @@ void LinuxAlignedFileReader::register_thread() {
     std::cerr << "io_setup() failed; returned " << ret << ", errno=" << errno
               << ":" << ::strerror(errno) << std::endl;
   } else {
-    diskann::cout << "allocating ctx: " << ctx << " to thread-id:" << my_id
-                  << std::endl;
-    ctx_map[my_id] = ctx;
+    diskann::cout << "allocating ctx: " << aio_ctx
+                  << " to thread-id:" << my_id << std::endl;
+    IOContext ioc;
+    ioc.impl = reinterpret_cast<void *>(aio_ctx);
+    ctx_map[my_id] = ioc;
   }
   lk.unlock();
 }
@@ -148,9 +154,8 @@ void LinuxAlignedFileReader::deregister_thread() {
   assert(ctx_map.find(my_id) != ctx_map.end());
 
   lk.unlock();
-  io_context_t ctx = this->get_ctx();
-  io_destroy(ctx);
-  //  assert(ret == 0);
+  IOContext &ctx = this->get_ctx();
+  io_destroy(to_aio(ctx));
   lk.lock();
   ctx_map.erase(my_id);
   std::cerr << "returned ctx from thread-id:" << my_id << std::endl;
@@ -160,23 +165,20 @@ void LinuxAlignedFileReader::deregister_thread() {
 void LinuxAlignedFileReader::deregister_all_threads() {
   std::unique_lock<std::mutex> lk(ctx_mut);
   for (auto x = ctx_map.begin(); x != ctx_map.end(); x++) {
-    io_context_t ctx = x.value();
-    io_destroy(ctx);
-    //  assert(ret == 0);
-    //  lk.lock();
-    //  ctx_map.erase(my_id);
-    //  std::cerr << "returned ctx from thread-id:" << my_id << std::endl;
+    io_destroy(to_aio(x.value()));
   }
   ctx_map.clear();
-  //  lk.unlock();
 }
 
-void LinuxAlignedFileReader::open(const std::string &fname) {
-  int flags = O_DIRECT | O_RDONLY | O_LARGEFILE;
-  this->file_desc = ::open(fname.c_str(), flags);
-  // error checks
+int LinuxAlignedFileReader::open(const std::string &uri, int /*flags*/) {
+  // Single-fd backend: ignore subsequent open() calls; always force the
+  // O_DIRECT|O_RDONLY|O_LARGEFILE flags expected by aio + the search path.
+  if (this->file_desc != -1) return 0;
+  int real_flags = O_DIRECT | O_RDONLY | O_LARGEFILE;
+  this->file_desc = ::open(uri.c_str(), real_flags);
   assert(this->file_desc != -1);
-  std::cerr << "Opened file : " << fname << std::endl;
+  std::cerr << "Opened file : " << uri << std::endl;
+  return 0;
 }
 
 void LinuxAlignedFileReader::close() {
@@ -191,21 +193,17 @@ void LinuxAlignedFileReader::close() {
 }
 
 void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
-                                  io_context_t &ctx, bool async) {
+                                  IOContext &ctx, bool async) {
   if (async == true) {
     diskann::cout << "Async currently not supported in linux." << std::endl;
   }
   assert(this->file_desc != -1);
-  //#pragma omp critical
-  //	std::cout << "thread: " << std::this_thread::get_id() << ", crtx: " <<
-  // ctx
-  //<< "\n";
-  execute_io(ctx, this->file_desc, read_reqs);
+  execute_io(to_aio(ctx), this->file_desc, read_reqs);
 }
 
 
 int LinuxAlignedFileReader::submit_reqs(std::vector<AlignedRead> &read_reqs,
-                                         io_context_t &ctx) {
+                                        IOContext &ctx) {
   assert(this->file_desc != -1);
 
   if (read_reqs.size() > MAX_EVENTS) {
@@ -225,12 +223,13 @@ int LinuxAlignedFileReader::submit_reqs(std::vector<AlignedRead> &read_reqs,
     cbs[i] = cb.data() + i;
   }
 
-  int ret = io_submit(ctx, (int64_t) n_ops, cbs.data());
+  io_context_t aio_ctx = to_aio(ctx);
+  int ret = io_submit(aio_ctx, (int64_t) n_ops, cbs.data());
   if (ret != n_ops) {
     std::cerr << "io_submit() failed; returned " << ret
               << ", expected=" << n_ops << ", ernno=" << errno << "="
               << ::strerror(-ret);
-    std::cout << "ctx: " << ctx << "\n";
+    std::cout << "ctx: " << aio_ctx << "\n";
     exit(-1);
   }
   return n_ops;
@@ -238,7 +237,7 @@ int LinuxAlignedFileReader::submit_reqs(std::vector<AlignedRead> &read_reqs,
 
 void LinuxAlignedFileReader::get_events(IOContext& ctx, int n_ops) {
   std::vector<io_event_t> evts(n_ops);
-  auto ret = io_getevents(ctx, (int64_t) n_ops, (int64_t) n_ops,
+  auto ret = io_getevents(to_aio(ctx), (int64_t) n_ops, (int64_t) n_ops,
                           evts.data(), nullptr);
   if (ret != (int64_t) n_ops) {
     std::cerr << "io_getevents() failed; returned " << ret;
@@ -246,15 +245,48 @@ void LinuxAlignedFileReader::get_events(IOContext& ctx, int n_ops) {
   }
 }
 
+int LinuxAlignedFileReader::submit_read_reqs(std::vector<AlignedRead> &read_reqs,
+                                             int fid, IOContext &ctx) {
+  if (fid != 0) {
+    throw diskann::ANNException(
+        "LinuxAlignedFileReader is single-fd; submit_read_reqs requires fid==0",
+        -1, __FUNCSIG__, __FILE__, __LINE__);
+  }
+  return submit_reqs(read_reqs, ctx);
+}
+
+int LinuxAlignedFileReader::submit_read_reqs(std::vector<AlignedRead> &read_reqs,
+                                             std::vector<int> &fids,
+                                             IOContext &ctx) {
+  for (int f : fids) {
+    if (f != 0) {
+      throw diskann::ANNException(
+          "LinuxAlignedFileReader is single-fd; submit_read_reqs fids must "
+          "all be 0",
+          -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+  }
+  return submit_reqs(read_reqs, ctx);
+}
+
+int LinuxAlignedFileReader::submit_write_reqs(
+    std::vector<AlignedWrite> & /*write_reqs*/, std::vector<int> & /*fids*/,
+    IOContext & /*ctx*/) {
+  throw diskann::ANNException(
+      "LinuxAlignedFileReader is read-only; submit_write_reqs not supported",
+      -1, __FUNCSIG__, __FILE__, __LINE__);
+}
+
 int LinuxAlignedFileReader::get_events(IOContext& ctx, int min_r, int max_r, std::vector<char*>& ofts) {
   std::vector<io_event_t> evts(max_r);
   int64_t ret;
+  io_context_t aio_ctx = to_aio(ctx);
   if (min_r != 0) {
-    ret = io_getevents(ctx, (int64_t) min_r, (int64_t) max_r, evts.data(), nullptr);
+    ret = io_getevents(aio_ctx, (int64_t) min_r, (int64_t) max_r, evts.data(), nullptr);
   }
   else {
     struct timespec ts = { 0, 0 } ;
-    ret = io_getevents(ctx, (int64_t) min_r, (int64_t) max_r, evts.data(), &ts);
+    ret = io_getevents(aio_ctx, (int64_t) min_r, (int64_t) max_r, evts.data(), &ts);
   }
   if (ret < min_r) {
     std::cerr << "io_getevents() failed; returned " << ret;

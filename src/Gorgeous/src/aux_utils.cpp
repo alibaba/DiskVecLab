@@ -34,7 +34,7 @@ namespace diskann {
   // the _disk.index file after commit id 8bb74ff637cb2a77c99b71368ade68c62b7ca8e0 (exclusive)
   // This function returns <is_new_version, vector of metas uint64_ts>
   std::pair<bool, std::vector<_u64>> get_disk_index_meta(const std::string& path) {
-      std::ifstream fin(path, std::ios::binary);
+      diskann::IFileInputStream fin(path, std::ios::binary);
 
       int meta_n, meta_dim;
       const int expected_new_meta_n = 9;
@@ -295,7 +295,7 @@ namespace diskann {
   void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs) {
     uint32_t      npts32, dim;
     size_t        actual_file_size = get_file_size(fname);
-    std::ifstream reader(fname.c_str(), std::ios::binary);
+    diskann::IFileInputStream reader(fname.c_str(), std::ios::binary);
     reader.read((char *) &npts32, sizeof(uint32_t));
     reader.read((char *) &dim, sizeof(uint32_t));
     if (dim != 1 || actual_file_size != ((size_t) npts32) * sizeof(uint32_t) +
@@ -400,7 +400,7 @@ namespace diskann {
                   << ", output width: " << output_width << std::endl;
 
     merged_vamana_writer.write((char *) &output_width, sizeof(unsigned));
-    std::ofstream medoid_writer(medoids_file.c_str(), std::ios::binary);
+    diskann::IFileOutputStream medoid_writer(medoids_file.c_str(), std::ios::binary);
     _u32          nshards_u32 = (_u32) nshards;
     _u32          one_val = 1;
     medoid_writer.write((char *) &nshards_u32, sizeof(uint32_t));
@@ -617,14 +617,14 @@ namespace diskann {
 
     // Check if we need to append data for re-ordering
     bool          append_reorder_data = false;
-    std::ifstream reorder_data_reader;
+    diskann::IFileInputStream reorder_data_reader;
 
     unsigned npts_reorder_file = 0, ndims_reorder_file = 0;
     if (reorder_data_file != std::string("")) {
       append_reorder_data = true;
       size_t reorder_data_file_size = get_file_size(reorder_data_file);
-      reorder_data_reader.exceptions(std::ofstream::failbit |
-                                     std::ofstream::badbit);
+      reorder_data_reader.exceptions(diskann::IFileOutputStream::failbit |
+                                     diskann::IFileOutputStream::badbit);
 
       try {
         reorder_data_reader.open(reorder_data_file, std::ios::binary);
@@ -649,7 +649,7 @@ namespace diskann {
     // create cached reader + writer
     size_t actual_file_size = get_file_size(mem_index_file);
     diskann::cout << "Vamana index file size=" << actual_file_size << std::endl;
-    std::ifstream   vamana_reader(mem_index_file, std::ios::binary);
+    diskann::IFileInputStream   vamana_reader(mem_index_file, std::ios::binary);
     cached_ofstream diskann_writer(output_file, write_blk_size);
 
     // metadata: width, medoid

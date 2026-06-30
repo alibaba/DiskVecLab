@@ -31,7 +31,7 @@
 
 namespace diskann {
   template<typename T>
-  DecoIndex<T>::DecoIndex(std::shared_ptr<FileIOManager> &IOManager,
+  DecoIndex<T>::DecoIndex(std::shared_ptr<AlignedFileReader> &IOManager,
                                 diskann::Metric m, bool use_graph_rep_index,
                                 _u64 gr_sector_len)
       : io_manager(IOManager), metric(m), use_graph_rep_index_(use_graph_rep_index) {
@@ -146,7 +146,7 @@ namespace diskann {
   void DecoIndex<T>::load_sampled_tags(const std::string& tags_path,
                                          std::vector<unsigned>& tags) {
     diskann::cout << "Opening bin file " << tags_path << " ... " << std::endl;
-    std::ifstream reader(tags_path, std::ios::binary);
+    diskann::IFileInputStream reader(tags_path, std::ios::binary);
     unsigned tags_size, const_one;
     reader.read((char *) &tags_size, sizeof(uint32_t));
     reader.read((char *) &const_one, sizeof(uint32_t));
@@ -384,7 +384,7 @@ namespace diskann {
     }
 
     // read index metadata
-    std::ifstream index_metadata(disk_index_file, std::ios::binary);
+    diskann::IFileInputStream index_metadata(disk_index_file, std::ios::binary);
     _u32 nr, nc;  // metadata itself is stored as bin format (nr is number of
                   // metadata, nc should be 1)
     READ_U32(index_metadata, nr);
@@ -497,7 +497,7 @@ namespace diskann {
       const _u64 num_points, int mode) {
     std::string partition_file = index_prefix + "_partition.bin";
     std::cout << partition_file << std::endl;
-    std::ifstream part(partition_file);
+    diskann::IFileInputStream part(partition_file);
     _u64          C, partition_nums, nd;
     part.read((char *) &C, sizeof(_u64));
     part.read((char *) &partition_nums, sizeof(_u64));

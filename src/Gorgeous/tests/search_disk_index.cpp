@@ -29,6 +29,7 @@
 #include "thread_pool.h"
 #include "file_io_manager.h"
 #include "deco_index.h"
+#include "io_registry.h"
 
 namespace po = boost::program_options;
 
@@ -102,22 +103,22 @@ int search_disk_index(
     calc_recall_flag = true;
   }
 
-  // default index (Starling)
-  std::shared_ptr<AlignedFileReader> reader = nullptr;
+  // default index (Starling) — single-fd async reader
+  std::shared_ptr<AlignedFileReader>        reader = nullptr;
   std::shared_ptr<diskann::PQFlashIndex<T>> _pFlashIndex;
 
-  // use disk separation
-  std::shared_ptr<FileIOManager> fio_reader = nullptr;
+  // use disk separation — multi-fd async reader
+  std::shared_ptr<AlignedFileReader>     fio_reader = nullptr;
   std::shared_ptr<diskann::DecoIndex<T>> _decoIndex;
 
   int res;
   if (deco_impl) {
-    fio_reader.reset(new FileIOManager());
+    fio_reader = diskann::IORegistry::instance().make_multi_fd_async(disk_file_path);
     _decoIndex = std::make_shared<diskann::DecoIndex<T>>(fio_reader, metric, use_graph_rep_index, sector_len);
     res = _decoIndex->load(num_threads, index_path_prefix.c_str(), pq_path_prefix.c_str(),
                            disk_file_path, graph_rep_index_prefix, disk_graph_prefix);
   }  else {
-    reader.reset(new LinuxAlignedFileReader());
+    reader = diskann::IORegistry::instance().make_async(disk_file_path);
     _pFlashIndex = std::make_shared<diskann::PQFlashIndex<T>>(reader, use_page_search, metric, sector_len);
     res = _pFlashIndex->load(num_threads, index_path_prefix.c_str(), pq_path_prefix.c_str(), disk_file_path);
   }

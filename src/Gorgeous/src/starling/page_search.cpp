@@ -12,7 +12,7 @@ namespace diskann {
   void PQFlashIndex<T>::load_partition_data(const std::string &index_prefix,
       const _u64 nnodes_per_sector, const _u64 num_points) {
     std::string partition_file = index_prefix + "_partition.bin";
-    std::ifstream part(partition_file);
+    diskann::IFileInputStream part(partition_file);
     _u64          C, partition_nums, nd;
     part.read((char *) &C, sizeof(_u64));
     part.read((char *) &partition_nums, sizeof(_u64));

@@ -9,6 +9,7 @@
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 
+#include "aligned_file_reader.h"
 #include "file_io_manager.h"
 #include "neighbor.h"
 #include "parameters.h"
@@ -25,7 +26,7 @@ namespace diskann {
   class DecoIndex {
    public:
     DISKANN_DLLEXPORT DecoIndex(
-        std::shared_ptr<FileIOManager> &fio_manager,
+        std::shared_ptr<AlignedFileReader> &fio_manager,
         diskann::Metric                     metric = diskann::Metric::L2,
         bool use_graph_rep_index = false,
         _u64 gr_sector_len = 4096);
@@ -66,7 +67,7 @@ namespace diskann {
         const _u64 beam_width, const _u32 io_limit,
         const float pq_filter_ratio = 1.2f, const float emb_search_ratio = 1.0f, QueryStats *stats = nullptr);
 
-    std::shared_ptr<FileIOManager> &io_manager;
+    std::shared_ptr<AlignedFileReader> &io_manager;
 
     DISKANN_DLLEXPORT unsigned get_nnodes_per_sector() { return nnodes_per_sector; }
     DISKANN_DLLEXPORT unsigned node_in_mem_pos(unsigned id) {

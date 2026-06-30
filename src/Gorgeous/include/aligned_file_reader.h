@@ -12,16 +12,23 @@
 #include <fcntl.h>
 #include <libaio.h>
 #include <unistd.h>
-typedef io_context_t IOContext;
+// Opaque per-thread I/O context. Backends store their own state in `impl`
+// (libaio: io_context_t cast to void*; S3: pointer to a per-thread completion
+// queue). Default-constructed instances are invalid.
+struct IOContext {
+  void* impl = nullptr;
+  bool  valid() const { return impl != nullptr; }
+};
 #else
 #include <Windows.h>
 #include <minwinbase.h>
 
 #ifndef USE_BING_INFRA
+// Same opaque struct as the Linux branch. The Windows backend stores a
+// pointer to its own WindowsIOContextImpl (defined alongside the reader).
 struct IOContext {
-  HANDLE                  fhandle = NULL;
-  HANDLE                  iocp = NULL;
-  std::vector<OVERLAPPED> reqs;
+  void* impl = nullptr;
+  bool  valid() const { return impl != nullptr; }
 };
 #else
 #include "IDiskPriorityIO.h"
@@ -92,34 +99,58 @@ struct AlignedWrite {
   }
 };
 
+// Common base class for all aligned-block I/O backends. Two flavours of
+// usage live behind one interface:
+//   * Single-fd (legacy AlignedFileReader: PQFlashIndex / starling) — call
+//     open() once, then read()/submit_reqs()/get_events().
+//   * Multi-fd (legacy FileIOManager: DecoIndex / gorgeous) — call open()
+//     multiple times collecting fids, then submit_read_reqs(reqs,fid,ctx)
+//     / submit_read_reqs(reqs,fids,ctx) / submit_write_reqs / get_events.
+//
+// Backends that implement only one flavour bridge the other to the
+// implemented one (single-fd reads default fid=0; multi-fd reads with fid=0
+// behave like single-fd). Calls that genuinely make no sense for a backend
+// (e.g. submit_write_reqs on a read-only AIO reader) throw ANNException.
 class AlignedFileReader {
  protected:
   tsl::robin_map<std::thread::id, IOContext> ctx_map;
   std::mutex                                 ctx_mut;
 
  public:
-  // returns the thread-specific context
-  // returns (io_context_t)(-1) if thread is not registered
-  virtual IOContext& get_ctx() = 0;
-
   virtual ~AlignedFileReader(){};
 
-  // register thread-id for a context
+  virtual IOContext& get_ctx() = 0;
+
   virtual void register_thread() = 0;
-  // de-register thread-id for a context
   virtual void deregister_thread() = 0;
   virtual void deregister_all_threads() = 0;
 
-  // Open & close ops
-  // Blocking calls
-  virtual void open(const std::string& fname) = 0;
+  // Open the URI for I/O; returns a file id (fid). Single-fd backends
+  // ignore subsequent calls and return 0. Multi-fd backends return a new
+  // fid each call.
+  virtual int  open(const std::string& uri, int flags = O_RDONLY) = 0;
   virtual void close() = 0;
 
-  // process batch of aligned requests in parallel
-  // NOTE :: blocking call
+  // Single-fd blocking read: reads against the most recently opened fd.
   virtual void read(std::vector<AlignedRead>& read_reqs, IOContext& ctx,
                     bool async = false) = 0;
-  virtual int submit_reqs(std::vector<AlignedRead>& read_reqs, IOContext& ctx) = 0;
-  virtual void get_events(IOContext &ctx, int n_ops) = 0;
-  virtual int get_events(IOContext& ctx, int min_r, int max_r, std::vector<char*>& ofts) = 0;
+
+  // Single-fd async submit (fid is implicit / fid=0).
+  virtual int submit_reqs(std::vector<AlignedRead>& read_reqs,
+                          IOContext& ctx) = 0;
+
+  // Multi-fd async submit: every request reads from the given fid, or from
+  // the per-request fids[i].
+  virtual int submit_read_reqs(std::vector<AlignedRead>& read_reqs, int fid,
+                               IOContext& ctx) = 0;
+  virtual int submit_read_reqs(std::vector<AlignedRead>& read_reqs,
+                               std::vector<int>&         fids,
+                               IOContext&                ctx) = 0;
+  virtual int submit_write_reqs(std::vector<AlignedWrite>& write_reqs,
+                                std::vector<int>&          fids,
+                                IOContext&                 ctx) = 0;
+
+  virtual void get_events(IOContext& ctx, int n_ops) = 0;
+  virtual int  get_events(IOContext& ctx, int min_r, int max_r,
+                          std::vector<char*>& ofts) = 0;
 };

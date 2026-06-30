@@ -368,7 +368,7 @@ namespace diskann {
   // 4 byte unsigned)
   template<typename T, typename TagT>
   _u64 Index<T, TagT>::save_graph(std::string graph_file) {
-    std::ofstream out;
+    diskann::IFileOutputStream out;
     open_file_to_write(out, graph_file);
 
     _u64 file_offset = 0;  // we will use this if we want
@@ -692,7 +692,7 @@ namespace diskann {
 #else
 
     _u64 file_offset = 0;  // will need this for single file format support
-    std::ifstream in;
+    diskann::IFileInputStream in;
     in.exceptions(std::ios::badbit | std::ios::failbit);
     in.open(filename, std::ios::binary);
     in.seekg(file_offset, in.beg);

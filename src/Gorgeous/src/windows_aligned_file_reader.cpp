@@ -5,19 +5,28 @@
 #ifndef USE_BING_INFRA
 #include "windows_aligned_file_reader.h"
 #include <iostream>
+#include "ann_exception.h"
 #include "utils.h"
 
 #define SECTOR_LEN 4096
 
-void WindowsAlignedFileReader::open(const std::string& fname) {
-  m_filename = std::wstring(fname.begin(), fname.end());
+namespace {
+  inline WindowsIOContextImpl* impl_of(IOContext& ctx) {
+    return static_cast<WindowsIOContextImpl*>(ctx.impl);
+  }
+}
+
+int WindowsAlignedFileReader::open(const std::string& uri, int /*flags*/) {
+  if (!m_filename.empty()) return 0;
+  m_filename = std::wstring(uri.begin(), uri.end());
   this->register_thread();
+  return 0;
 }
 
 void WindowsAlignedFileReader::close() {
   for (auto& k_v : ctx_map) {
-    IOContext ctx = ctx_map[k_v.first];
-    CloseHandle(ctx.fhandle);
+    auto* w = impl_of(ctx_map[k_v.first]);
+    if (w) CloseHandle(w->fhandle);
   }
 }
 
@@ -28,28 +37,29 @@ void WindowsAlignedFileReader::register_thread() {
                   << std::this_thread::get_id() << std::endl;
   }
 
-  IOContext ctx;
-  ctx.fhandle = CreateFile(m_filename.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                           NULL, OPEN_EXISTING,
-                           FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING |
-                               FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS,
-                           NULL);
-  if (ctx.fhandle == INVALID_HANDLE_VALUE) {
+  auto* w = new WindowsIOContextImpl();
+  w->fhandle = CreateFile(m_filename.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                          NULL, OPEN_EXISTING,
+                          FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING |
+                              FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS,
+                          NULL);
+  if (w->fhandle == INVALID_HANDLE_VALUE) {
     diskann::cout << "Error opening " << m_filename.c_str()
                   << " -- error=" << GetLastError() << std::endl;
   }
 
   // create IOCompletionPort
-  ctx.iocp = CreateIoCompletionPort(ctx.fhandle, ctx.iocp, 0, 0);
+  w->iocp = CreateIoCompletionPort(w->fhandle, w->iocp, 0, 0);
 
   // create MAX_DEPTH # of reqs
   for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
     OVERLAPPED os;
     memset(&os, 0, sizeof(OVERLAPPED));
-    // os.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
-    ctx.reqs.push_back(os);
+    w->reqs.push_back(os);
   }
-  this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), ctx));
+  IOContext ioc;
+  ioc.impl = w;
+  this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), ioc));
 }
 
 IOContext& WindowsAlignedFileReader::get_ctx() {
@@ -69,12 +79,13 @@ IOContext& WindowsAlignedFileReader::get_ctx() {
 void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
                                     IOContext& ctx, bool async) {
   using namespace std::chrono_literals;
+  WindowsIOContextImpl* w = impl_of(ctx);
   // execute each request sequentially
   _u64 n_reqs = read_reqs.size();
   _u64 n_batches = ROUND_UP(n_reqs, MAX_IO_DEPTH) / MAX_IO_DEPTH;
   for (_u64 i = 0; i < n_batches; i++) {
     // reset all OVERLAPPED objects
-    for (auto& os : ctx.reqs) {
+    for (auto& os : w->reqs) {
       // HANDLE evt = os.hEvent;
       memset(&os, 0, sizeof(os));
       // os.hEvent = evt;
@@ -95,7 +106,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
     // fill OVERLAPPED and issue them
     for (_u64 j = 0; j < batch_size; j++) {
       AlignedRead& req = read_reqs[batch_start + j];
-      OVERLAPPED&  os = ctx.reqs[j];
+      OVERLAPPED&  os = w->reqs[j];
 
       _u64  offset = req.offset;
       _u64  nbytes = req.len;
@@ -108,7 +119,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
       os.Offset = offset & 0xffffffff;
       os.OffsetHigh = (offset >> 32);
 
-      BOOL ret = ReadFile(ctx.fhandle, read_buf, nbytes, NULL, &os);
+      BOOL ret = ReadFile(w->fhandle, read_buf, nbytes, NULL, &os);
       if (ret == FALSE) {
         auto error = GetLastError();
         if (error != ERROR_IO_PENDING) {
@@ -124,7 +135,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
     ULONG_PTR   completion_key = 0;
     OVERLAPPED* lp_os;
     while (n_complete < batch_size) {
-      if (GetQueuedCompletionStatus(ctx.iocp, &n_read, &completion_key, &lp_os,
+      if (GetQueuedCompletionStatus(w->iocp, &n_read, &completion_key, &lp_os,
                                     INFINITE) != 0) {
         // successfully dequeued a completed I/O
         n_complete++;
@@ -143,7 +154,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
           std::this_thread::sleep_for(5us);
         } else {
           // completion packet for failed IO dequeued
-          auto              op_idx = lp_os - ctx.reqs.data();
+          auto              op_idx = lp_os - w->reqs.data();
           std::stringstream stream;
           stream << "I/O failed , offset: " << read_reqs[op_idx].offset
                  << "with error code: " << GetLastError() << std::endl;
@@ -153,6 +164,58 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
       }
     }
   }
+}
+
+int WindowsAlignedFileReader::submit_reqs(std::vector<AlignedRead> & /*read_reqs*/,
+                                          IOContext & /*ctx*/) {
+  throw diskann::ANNException(
+      "WindowsAlignedFileReader::submit_reqs is not implemented", -1,
+      __FUNCSIG__, __FILE__, __LINE__);
+}
+
+int WindowsAlignedFileReader::submit_read_reqs(
+    std::vector<AlignedRead> &read_reqs, int fid, IOContext &ctx) {
+  if (fid != 0) {
+    throw diskann::ANNException(
+        "WindowsAlignedFileReader is single-fd; submit_read_reqs requires fid==0",
+        -1, __FUNCSIG__, __FILE__, __LINE__);
+  }
+  return submit_reqs(read_reqs, ctx);
+}
+
+int WindowsAlignedFileReader::submit_read_reqs(
+    std::vector<AlignedRead> &read_reqs, std::vector<int> &fids,
+    IOContext &ctx) {
+  for (int f : fids) {
+    if (f != 0) {
+      throw diskann::ANNException(
+          "WindowsAlignedFileReader is single-fd; fids must all be 0", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
+    }
+  }
+  return submit_reqs(read_reqs, ctx);
+}
+
+int WindowsAlignedFileReader::submit_write_reqs(
+    std::vector<AlignedWrite> & /*write_reqs*/, std::vector<int> & /*fids*/,
+    IOContext & /*ctx*/) {
+  throw diskann::ANNException(
+      "WindowsAlignedFileReader is read-only; submit_write_reqs not supported",
+      -1, __FUNCSIG__, __FILE__, __LINE__);
+}
+
+void WindowsAlignedFileReader::get_events(IOContext & /*ctx*/, int /*n_ops*/) {
+  throw diskann::ANNException(
+      "WindowsAlignedFileReader::get_events is not implemented", -1,
+      __FUNCSIG__, __FILE__, __LINE__);
+}
+
+int WindowsAlignedFileReader::get_events(IOContext & /*ctx*/, int /*min_r*/,
+                                         int /*max_r*/,
+                                         std::vector<char *> & /*ofts*/) {
+  throw diskann::ANNException(
+      "WindowsAlignedFileReader::get_events is not implemented", -1,
+      __FUNCSIG__, __FILE__, __LINE__);
 }
 #endif
 #endif

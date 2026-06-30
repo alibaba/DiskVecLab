@@ -69,6 +69,12 @@ typedef int FileHandle;
 #define BUFFER_SIZE_FOR_CACHED_IO (_u64) 1024 * (_u64) 1048576
 
 inline bool file_exists(const std::string& name, bool dirCheck = false) {
+  // Non-local URI: route through the registered backend (no dir support).
+  auto colon = name.find("://");
+  if (colon != std::string::npos && name.substr(0, colon) != "file") {
+    (void) dirCheck;
+    return diskann::fs_exists(name);
+  }
   int val;
 #ifndef _WINDOWS
   struct stat buffer;
@@ -108,31 +114,31 @@ typedef uint16_t _u16;
 typedef int16_t  _s16;
 typedef uint8_t  _u8;
 typedef int8_t   _s8;
-inline void      open_file_to_write(std::ofstream&     writer,
-                                    const std::string& filename) {
-  writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
-  if (!file_exists(filename))
+inline void      open_file_to_write(diskann::IFileOutputStream& writer,
+                                    const std::string&         filename) {
+  writer.exceptions(std::ios::failbit | std::ios::badbit);
+  try {
     writer.open(filename, std::ios::binary | std::ios::out);
-  else
-    writer.open(filename, std::ios::binary | std::ios::in | std::ios::out);
-
-  if (writer.fail()) {
-    char buff[1024];
-#ifdef _WINDOWS
-    strerror_s(buff, 1024, errno);
-#else
-    strerror_r(errno, buff, 1024);
-#endif
-    diskann::cerr << std::string("Failed to open file") + filename +
-                         " for write because " + buff
-                  << std::endl;
+  } catch (const std::exception& e) {
+    diskann::cerr << "Failed to open file " << filename
+                  << " for write: " << e.what() << std::endl;
     throw diskann::ANNException(std::string("Failed to open file ") + filename +
-                                    " for write because: " + buff,
+                                    " for write: " + e.what(),
                                 -1);
   }
 }
 
 inline _u64 get_file_size(const std::string& fname) {
+  // Non-local URI: route through the registered backend.
+  auto colon = fname.find("://");
+  if (colon != std::string::npos && fname.substr(0, colon) != "file") {
+    try {
+      return diskann::fs_size(fname);
+    } catch (...) {
+      diskann::cerr << "Could not stat file: " << fname << std::endl;
+      return 0;
+    }
+  }
   std::ifstream reader(fname, std::ios::binary | std::ios::ate);
   if (!reader.fail() && reader.is_open()) {
     _u64 end_pos = reader.tellg();
@@ -145,6 +151,19 @@ inline _u64 get_file_size(const std::string& fname) {
 }
 
 inline int delete_file(const std::string& fileName) {
+  // Non-local URI: route through the registered backend.
+  auto colon = fileName.find("://");
+  if (colon != std::string::npos && fileName.substr(0, colon) != "file") {
+    if (!file_exists(fileName)) return 0;
+    try {
+      diskann::fs_remove(fileName);
+      return 0;
+    } catch (...) {
+      diskann::cerr << "Could not delete remote file: " << fileName
+                    << std::endl;
+      return -1;
+    }
+  }
   if (file_exists(fileName)) {
     auto rc = ::remove(fileName.c_str());
     if (rc != 0) {
@@ -258,7 +277,7 @@ namespace diskann {
 
   inline void get_bin_metadata(const std::string& bin_file, size_t& nrows,
                                size_t& ncols, size_t offset = 0) {
-    std::ifstream reader(bin_file.c_str(), std::ios::binary);
+    diskann::IFileInputStream reader(bin_file, std::ios::binary);
     get_bin_metadata_impl(reader, nrows, ncols, offset);
   }
   // get_bin_metadata functions END
@@ -349,8 +368,8 @@ namespace diskann {
                        size_t& dim, size_t offset = 0) {
     diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
                   << std::endl;
-    std::ifstream reader;
-    reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    diskann::IFileInputStream reader;
+    reader.exceptions(std::ios::failbit | std::ios::badbit);
 
     try {
       diskann::cout << "Opening bin file " << bin_file.c_str() << "... "
@@ -570,28 +589,16 @@ namespace diskann {
     data.reset(ptr);
   }
 
-  inline void open_file_to_write(std::ofstream&     writer,
-                                 const std::string& filename) {
-    writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
-    if (!file_exists(filename))
+  inline void open_file_to_write(diskann::IFileOutputStream& writer,
+                                 const std::string&          filename) {
+    writer.exceptions(std::ios::failbit | std::ios::badbit);
+    try {
       writer.open(filename, std::ios::binary | std::ios::out);
-    else
-      writer.open(filename, std::ios::binary | std::ios::in | std::ios::out);
-
-    if (writer.fail()) {
-      char buff[1024];
-#ifdef _WINDOWS
-      strerror_s(buff, 1024, errno);
-#else
-      if (strerror_r(errno, buff, 1024)) {
-        diskann::cerr << "strerror_r() failed" << std::endl;
-      }
-#endif
-      diskann::cerr << std::string("Failed to open file") + filename +
-                           " for write because " + buff
-                    << std::endl;
+    } catch (const std::exception& e) {
+      diskann::cerr << "Failed to open file " << filename
+                    << " for write: " << e.what() << std::endl;
       throw diskann::ANNException(std::string("Failed to open file ") +
-                                      filename + " for write because: " + buff,
+                                      filename + " for write: " + e.what(),
                                   -1);
     }
   }
@@ -599,7 +606,7 @@ namespace diskann {
   template<typename T>
   inline uint64_t save_bin(const std::string& filename, T* data, size_t npts,
                            size_t ndims, size_t offset = 0) {
-    std::ofstream writer;
+    diskann::IFileOutputStream writer;
     open_file_to_write(writer, filename);
 
     diskann::cout << "Writing bin: " << filename.c_str() << std::endl;
@@ -682,8 +689,8 @@ namespace diskann {
   template<typename T>
   inline void load_aligned_bin(const std::string& bin_file, T*& data,
                                size_t& npts, size_t& dim, size_t& rounded_dim) {
-    std::ifstream reader;
-    reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    diskann::IFileInputStream reader;
+    reader.exceptions(std::ios::failbit | std::ios::badbit);
 
     try {
       diskann::cout << "Reading (with alignment) bin file " << bin_file
@@ -722,8 +729,8 @@ namespace diskann {
                                         const std::string out_file) {
     std::cout << "Pre-processing base file by adding extra coordinate"
               << std::endl;
-    std::ifstream in_reader(in_file.c_str(), std::ios::binary);
-    std::ofstream out_writer(out_file.c_str(), std::ios::binary);
+    diskann::IFileInputStream  in_reader(in_file, std::ios::binary);
+    diskann::IFileOutputStream out_writer(out_file, std::ios::binary);
     _u64          npts, in_dims, out_dims;
     float         max_norm = 0;
 
@@ -817,7 +824,7 @@ namespace diskann {
                                                T* data, size_t npts,
                                                size_t ndims, size_t aligned_dim,
                                                size_t offset = 0) {
-    std::ofstream writer;  //(filename, std::ios::binary | std::ios::out);
+    diskann::IFileOutputStream writer;
     open_file_to_write(writer, filename);
     int  npts_i32 = (int) npts, ndims_i32 = (int) ndims;
     _u64 bytes_written = 2 * sizeof(uint32_t) + npts * ndims * sizeof(T);
@@ -844,7 +851,7 @@ namespace diskann {
           "Null pointer passed to copy_aligned_data_from_file function", -1,
           __FUNCSIG__, __FILE__, __LINE__);
     }
-    std::ifstream reader;
+    diskann::IFileInputStream reader;
     reader.exceptions(std::ios::badbit | std::ios::failbit);
     reader.open(bin_file, std::ios::binary);
     reader.seekg(offset, reader.beg);
@@ -876,8 +883,9 @@ namespace diskann {
   }
 
   // NOTE: Implementation in utils.cpp.
-  void block_convert(std::ofstream& writr, std::ifstream& readr,
-                     float* read_buf, _u64 npts, _u64 ndims);
+  void block_convert(diskann::IFileOutputStream& writr,
+                     diskann::IFileInputStream& readr, float* read_buf,
+                     _u64 npts, _u64 ndims);
 
   DISKANN_DLLEXPORT void normalize_data_file(const std::string& inFileName,
                                              const std::string& outFileName);
@@ -915,7 +923,7 @@ inline bool file_exists(const std::string& name) {
 }
 */
 
-inline bool validate_index_file_size(std::ifstream& in) {
+inline bool validate_index_file_size(diskann::IFileInputStream& in) {
   if (!in.is_open())
     throw diskann::ANNException(
         "Index file size check called on unopened file stream", -1, __FUNCSIG__,

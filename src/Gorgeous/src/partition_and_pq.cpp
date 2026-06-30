@@ -51,9 +51,9 @@ void gen_random_slice(const std::string base_file,
                       const std::string output_prefix, double sampling_rate) {
   _u64            read_blk_size = 64 * 1024 * 1024;
   cached_ifstream base_reader(base_file.c_str(), read_blk_size);
-  std::ofstream sample_writer(std::string(output_prefix + "_data.bin").c_str(),
+  diskann::IFileOutputStream sample_writer(std::string(output_prefix + "_data.bin").c_str(),
                               std::ios::binary);
-  std::ofstream sample_id_writer(
+  diskann::IFileOutputStream sample_id_writer(
       std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
 
   std::random_device
@@ -477,7 +477,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
     diskann::cout << "Loaded PQ pivot information" << std::endl;
   }
 
-  std::ofstream compressed_file_writer(pq_compressed_vectors_path,
+  diskann::IFileOutputStream compressed_file_writer(pq_compressed_vectors_path,
                                        std::ios::binary);
   _u32          num_pq_chunks_u32 = num_pq_chunks;
 
@@ -487,7 +487,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
   size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
 
 #ifdef SAVE_INFLATED_PQ
-  std::ofstream inflated_file_writer(inflated_pq_file, std::ios::binary);
+  diskann::IFileOutputStream inflated_file_writer(inflated_pq_file, std::ios::binary);
   inflated_file_writer.write((char *) &num_points, sizeof(uint32_t));
   inflated_file_writer.write((char *) &basedim32, sizeof(uint32_t));
 
@@ -679,8 +679,8 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
 
   std::unique_ptr<size_t[]> shard_counts =
       std::make_unique<size_t[]>(num_centers);
-  std::vector<std::ofstream> shard_data_writer(num_centers);
-  std::vector<std::ofstream> shard_idmap_writer(num_centers);
+  std::vector<diskann::IFileOutputStream> shard_data_writer(num_centers);
+  std::vector<diskann::IFileOutputStream> shard_idmap_writer(num_centers);
   _u32                       dummy_size = 0;
   _u32                       const_one = 1;
 
@@ -690,9 +690,9 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
     std::string idmap_filename =
         prefix_path + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
     shard_data_writer[i] =
-        std::ofstream(data_filename.c_str(), std::ios::binary);
+        diskann::IFileOutputStream(data_filename.c_str(), std::ios::binary);
     shard_idmap_writer[i] =
-        std::ofstream(idmap_filename.c_str(), std::ios::binary);
+        diskann::IFileOutputStream(idmap_filename.c_str(), std::ios::binary);
     shard_data_writer[i].write((char *) &dummy_size, sizeof(uint32_t));
     shard_data_writer[i].write((char *) &basedim32, sizeof(uint32_t));
     shard_idmap_writer[i].write((char *) &dummy_size, sizeof(uint32_t));
@@ -782,7 +782,7 @@ int shard_data_into_clusters_only_ids(const std::string data_file,
   std::unique_ptr<size_t[]> shard_counts =
       std::make_unique<size_t[]>(num_centers);
 
-  std::vector<std::ofstream> shard_idmap_writer(num_centers);
+  std::vector<diskann::IFileOutputStream> shard_idmap_writer(num_centers);
   _u32                       dummy_size = 0;
   _u32                       const_one = 1;
 
@@ -790,7 +790,7 @@ int shard_data_into_clusters_only_ids(const std::string data_file,
     std::string idmap_filename =
         prefix_path + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
     shard_idmap_writer[i] =
-        std::ofstream(idmap_filename.c_str(), std::ios::binary);
+        diskann::IFileOutputStream(idmap_filename.c_str(), std::ios::binary);
     shard_idmap_writer[i].write((char *) &dummy_size, sizeof(uint32_t));
     shard_idmap_writer[i].write((char *) &const_one, sizeof(uint32_t));
     shard_counts[i] = 0;
@@ -865,7 +865,7 @@ int retrieve_shard_data_from_ids(const std::string data_file,
 
   _u32 dummy_size = 0;
 
-  std::ofstream shard_data_writer(data_filename.c_str(), std::ios::binary);
+  diskann::IFileOutputStream shard_data_writer(data_filename.c_str(), std::ios::binary);
   shard_data_writer.write((char *) &dummy_size, sizeof(uint32_t));
   shard_data_writer.write((char *) &basedim32, sizeof(uint32_t));
 

@@ -19,6 +19,30 @@ project(diskann)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(WITH_S3 "Build with S3/OSS object-storage backend (requires aws-sdk-cpp)" OFF)
+if(WITH_S3)
+    # aws-sdk-cpp's transitive deps (aws-c-cal -> aws-lc/openssl) reference
+    # the OpenSSL::Crypto IMPORTED target. We must find_package(OpenSSL) first
+    # so that target exists when cmake resolves AWSSDK_LINK_LIBRARIES.
+    find_package(OpenSSL REQUIRED)
+    find_package(CURL    REQUIRED)
+    find_package(ZLIB    REQUIRED)
+    # Locate aws-sdk-cpp. Prefer system packages, fall back to a custom
+    # install location passed via -DCMAKE_PREFIX_PATH=/path/to/install.
+    find_package(AWSSDK QUIET COMPONENTS s3)
+    if(NOT AWSSDK_FOUND)
+        message(FATAL_ERROR
+            "WITH_S3=ON requested but aws-sdk-cpp not found.\n"
+            "Install via system package, e.g.:\n"
+            "  apt install libaws-cpp-sdk-s3-dev   (Debian/Ubuntu, when available)\n"
+            "  yum install aws-sdk-cpp-devel        (RHEL/CentOS, when available)\n"
+            "Or build from source and re-run cmake with:\n"
+            "  -DCMAKE_PREFIX_PATH=/path/to/aws-sdk-cpp/install")
+    endif()
+    add_definitions(-DWITH_S3)
+    message(STATUS "WITH_S3=ON; aws-sdk-cpp found (s3 link libs: ${AWSSDK_LINK_LIBRARIES})")
+endif()
+
 add_subdirectory(graph_partition)
 
 if(MSVC)

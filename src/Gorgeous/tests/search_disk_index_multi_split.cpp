@@ -29,6 +29,7 @@
 #include "thread_pool.h"
 #include "file_io_manager.h"
 #include "deco_index.h"
+#include "io_registry.h"
 
 #include <experimental/filesystem>
 
@@ -182,12 +183,12 @@ int search_disk_index_multi_split(
 		delete[] ids;
 	}
 
-  // default index (Starling)
-  std::vector<std::shared_ptr<AlignedFileReader>> readers(num_shards);
+  // default index (Starling) — single-fd async reader per shard
+  std::vector<std::shared_ptr<AlignedFileReader>>        readers(num_shards);
   std::vector<std::shared_ptr<diskann::PQFlashIndex<T>>> flash_indices;
 
-  // use disk separation
-  std::vector<std::shared_ptr<FileIOManager>> fio_readers(num_shards);
+  // use disk separation — multi-fd async reader per shard
+  std::vector<std::shared_ptr<AlignedFileReader>>     fio_readers(num_shards);
   std::vector<std::shared_ptr<diskann::DecoIndex<T>>> deco_indices;
 
   for (_u32 shard = 0; shard < num_shards; shard++) {
@@ -203,12 +204,12 @@ int search_disk_index_multi_split(
 
     int res;
     if (deco_impl) {
-      fio_readers[shard].reset(new FileIOManager());
+      fio_readers[shard] = diskann::IORegistry::instance().make_multi_fd_async(disk_file_path);
       deco_indices.push_back(std::make_shared<diskann::DecoIndex<T>>(fio_readers[shard], metric, use_graph_rep_index, sector_len));
       res = deco_indices[shard]->load(num_threads, index_path.c_str(), pq_path_prefix.c_str(),
                                       disk_file_path, graph_rep_index_prefix, disk_graph_prefix);
     }  else {
-      readers[shard].reset(new LinuxAlignedFileReader());
+      readers[shard] = diskann::IORegistry::instance().make_async(disk_file_path);
       flash_indices.push_back(std::make_shared<diskann::PQFlashIndex<T>>(readers[shard], use_page_search, metric, sector_len));
       res = flash_indices[shard]->load(num_threads, index_path.c_str(), pq_path_prefix.c_str(), disk_file_path);
     }

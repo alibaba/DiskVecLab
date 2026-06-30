@@ -45,8 +45,8 @@ int build_in_memory_index(const diskann::Metric& metric,
     diskann::cerr << "The number of data and tags mismatch" << std::endl;
     exit(1);
   }
-  std::ifstream reader;
-  reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+  diskann::IFileInputStream reader;
+  reader.exceptions(std::ios::failbit | std::ios::badbit);
   diskann::cout << "Opening bin file " << tags_path << "... " << std::endl;
   reader.open(tags_path, std::ios::binary | std::ios::ate);
   reader.seekg(2 * sizeof(_u32), std::ios::beg);

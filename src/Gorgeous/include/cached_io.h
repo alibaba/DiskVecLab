@@ -7,8 +7,9 @@
 #include <iostream>
 #include <sstream>
 
-#include "logger.h"
 #include "ann_exception.h"
+#include "file_streams.h"
+#include "logger.h"
 
 // sequential cached reads
 class cached_ifstream {
@@ -17,7 +18,7 @@ class cached_ifstream {
   }
   cached_ifstream(const std::string& filename, uint64_t cacheSize)
       : cache_size(cacheSize), cur_off(0) {
-    reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    reader.exceptions(std::ios::failbit | std::ios::badbit);
     this->open(filename, cache_size);
   }
   ~cached_ifstream() {
@@ -90,8 +91,8 @@ class cached_ifstream {
   }
 
  private:
-  // underlying ifstream
-  std::ifstream reader;
+  // underlying input stream (file:// or s3:// via IFileSystem)
+  diskann::IFileInputStream reader;
   // # bytes to cache in one shot read
   uint64_t cache_size = 0;
   // underlying buf for cache
@@ -107,7 +108,7 @@ class cached_ofstream {
  public:
   cached_ofstream(const std::string& filename, uint64_t cache_size)
       : cache_size(cache_size), cur_off(0) {
-    writer.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    writer.exceptions(std::ios::failbit | std::ios::badbit);
     try {
       writer.open(filename, std::ios::binary);
       assert(writer.is_open());
@@ -179,8 +180,8 @@ class cached_ofstream {
   }
 
  private:
-  // underlying ofstream
-  std::ofstream writer;
+  // underlying output stream (file:// or s3:// via IFileSystem)
+  diskann::IFileOutputStream writer;
   // # bytes to cache for one shot write
   uint64_t cache_size = 0;
   // underlying buf for cache

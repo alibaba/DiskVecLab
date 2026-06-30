@@ -671,7 +671,7 @@ namespace diskann {
     ContentBuf               buf(bytes, HEADER_SIZE);
     std::basic_istream<char> index_metadata(&buf);
 #else
-    std::ifstream index_metadata(disk_index_file, std::ios::binary);
+    diskann::IFileInputStream index_metadata(disk_index_file, std::ios::binary);
 #endif
     _u32 nr, nc;  // metadata itself is stored as bin format (nr is number of
                   // metadata, nc should be 1)

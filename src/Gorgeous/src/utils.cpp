@@ -174,8 +174,9 @@ namespace diskann {
     }
   }
 
-  void block_convert(std::ofstream& writr, std::ifstream& readr,
-                     float* read_buf, _u64 npts, _u64 ndims) {
+  void block_convert(diskann::IFileOutputStream& writr,
+                     diskann::IFileInputStream& readr, float* read_buf,
+                     _u64 npts, _u64 ndims) {
     readr.read((char*) read_buf, npts * ndims * sizeof(float));
     _u32 ndims_u32 = (_u32) ndims;
 #pragma omp parallel for
@@ -195,8 +196,8 @@ namespace diskann {
 
   void normalize_data_file(const std::string& inFileName,
                            const std::string& outFileName) {
-    std::ifstream readr(inFileName, std::ios::binary);
-    std::ofstream writr(outFileName, std::ios::binary);
+    diskann::IFileInputStream  readr(inFileName, std::ios::binary);
+    diskann::IFileOutputStream writr(outFileName, std::ios::binary);
 
     int npts_s32, ndims_s32;
     readr.read((char*) &npts_s32, sizeof(_s32));
